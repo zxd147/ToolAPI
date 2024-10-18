@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>音频转换</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background-color: #f4f4f4;
+            margin: 0;
+            padding: 20px;
+        }
+        h1 {
+            text-align: center;
+            color: #333;
+            margin-bottom: 20px;
+            font-size: 24px;
+        }
+        .container {
+            max-width: 500px;
+            margin: 0 auto;
+            background: #fff;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+        }
+        form {
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+        }
+        .file-upload {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            position: relative;
+            overflow: hidden;
+            border: 2px dashed #ddd;
+            border-radius: 5px;
+            padding: 20px;
+            cursor: pointer;
+            transition: border-color 0.3s ease;
+            background-color: #fafafa;
+        }
+        .file-upload:hover {
+            border-color: #5cb85c;
+        }
+        .file-upload input[type="file"] {
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            opacity: 0;
+            cursor: pointer;
+        }
+        .file-upload-label {
+            font-size: 18px;
+            color: #555;
+            font-weight: bold;
+        }
+        button {
+            background-color: #5cb85c;
+            color: white;
+            padding: 10px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 18px;
+            transition: background-color 0.3s ease;
+        }
+        button:hover {
+            background-color: #4cae4c;
+        }
+        audio {
+            margin-top: 20px;
+            width: 100%;
+            outline: none;
+        }
+        .file-name {
+            margin-top: 10px;
+            font-size: 16px;
+            color: #333;
+            text-align: center;
+            font-weight: bold;
+        }
+        .input-group {
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+        }
+        .input-group label {
+            font-weight: bold;
+            color: #555;
+        }
+        .input-group input {
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            font-size: 16px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>上传音频文件进行转换</h1>
+        <form id="uploadForm" enctype="multipart/form-data">
+            <label class="file-upload">
+                <span class="file-upload-label">选择音频文件</span>
+                <input type="file" id="audioFile" name="audio_file" accept="audio/*" required onchange="displayFileName()">
+            </label>
+            <div class="input-group">
+                <label for="audioFormat">音频格式 (如 wav, mp3):</label>
+                <input type="text" id="audioFormat" name="audio_format" placeholder="请输入音频格式">
+            </div>
+            <div class="input-group">
+                <label for="audioSampleRate">采样率 (如 44100):</label>
+                <input type="number" id="audioSampleRate" name="audio_sample_rate" placeholder="请输入采样率">
+            </div>
+            <button type="submit">上传并转换</button>
+        </form>
+        <div class="file-name" id="fileName"></div>
+        <audio id="audioPlayer" controls style="display:none;"></audio>
+    </div>
+    <script>
+        function displayFileName() {
+            const audioFile = document.getElementById('audioFile').files[0]; // 获取选择的文件
+            const fileNameDisplay = document.getElementById('fileName');
+            if (audioFile) {
+                fileNameDisplay.textContent = `已选择文件: ${audioFile.name}`; // 显示文件名
+            } else {
+                fileNameDisplay.textContent = ''; // 清空文件名
+            }
+        }
+
+        document.getElementById('uploadForm').onsubmit = async function(event) {
+            event.preventDefault(); // 阻止表单默认提交
+            const formData = new FormData(this);
+            const audioFormat = document.getElementById('audioFormat').value.trim();
+            const audioSampleRate = document.getElementById('audioSampleRate').value.trim();
+
+            // 仅在填写了音频格式且非空时添加到 FormData
+            if (audioFormat) {
+                formData.append('audio_format', audioFormat);
+                console.log('添加音频格式到FormData:', audioFormat);
+            } else {
+                console.log('未添加音频格式，因为为空');
+            }
+
+            // 仅在填写了采样率且非空时添加到 FormData
+            if (audioSampleRate) {
+                formData.append('audio_sample_rate', audioSampleRate);
+                console.log('添加采样率到FormData:', audioSampleRate);
+            } else {
+                console.log('未添加采样率，因为为空');
+            }
+
+            // 过滤空字段
+            for (const [key, value] of formData.entries()) {
+                if (!value) {
+                    formData.delete(key, value);
+                }
+            }
+
+            const response = await fetch('/audio/convert', { method: 'POST', body: formData });
+            if (response.ok) {
+                const audioBlob = await response.blob(); // 获取音频的 Blob 对象
+                const audioUrl = URL.createObjectURL(audioBlob); // 创建对象 URL
+                const audioPlayer = document.getElementById('audioPlayer');
+                audioPlayer.src = audioUrl; // 设置音频播放源
+                audioPlayer.style.display = 'block'; // 显示音频播放器
+                audioPlayer.play(); // 播放音频
+            } else {
+                console.error('音频转换失败:', response.statusText);
+                alert('音频转换失败，请重试。');
+            }
+        };
+    </script>
+</body>
+</html>
