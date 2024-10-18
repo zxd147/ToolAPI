@@ -7,10 +7,7 @@ import mimetypes
 import os
 import random
 import re
-import select
-import subprocess
 import sys
-import threading
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
@@ -18,7 +15,6 @@ from datetime import datetime
 from typing import Optional, Union
 
 import aiofiles
-import ffmpeg
 import httpx
 import magic
 import numpy as np
@@ -465,7 +461,7 @@ async def stream_output(process):
         yield audio
 
 
-async def convert_by_ffmpeg_on_buffer(audio_buffer, request_data, stream, input_format):
+async def convert_by_ffmpeg_on_buffer(audio, request_data, stream, input_format):
     start = time.process_time()
     # 使用ffmpeg, 生成器流式写入音频数据并读取输出
     audio_format = request_data['audio_format'].replace('.', '')
@@ -473,10 +469,12 @@ async def convert_by_ffmpeg_on_buffer(audio_buffer, request_data, stream, input_
     codec = codec_format_map[audio_format]['codec']
     # 设置环境变量（如果需要的话）
     os.environ['FFMPEG_BUFFER_SIZE'] = str(1024 * 1024 * 3)  # 设置为1MB
-    input_cmd = [
+    # 使用 ffmpeg-python 进行流式处理
+    # 写入部分
+    command = [
         'ffmpeg',
         '-stream_loop', '-1',
-        '-i', 'pipe:0',
+        '-i', "pipe:0",  # 从文件路径读取, 直接开始处理数据
         '-f', input_format,
         '-ar', str(audio_sampling_rate),
         '-c:a', codec,  # 指定音频编解码器
@@ -486,16 +484,16 @@ async def convert_by_ffmpeg_on_buffer(audio_buffer, request_data, stream, input_
         '-vsync', '1',
         '-threads', '4',
         '-f', audio_format,
-        'pipe:1'  # 输出到管道
+        'pipe:1'  # 输出到标准输出
     ]
     process = await asyncio.create_subprocess_exec(
-        *input_cmd,
+        *command,
         stdin=asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE
     )
     # 启动 write_task 后，事件循环会立即返回，并允许执行后续的代码，
-    write_task = asyncio.create_task(write_input(process, audio_buffer))
+    write_task = asyncio.create_task(write_input(process, audio))
     if stream:
         try:
             # 流式情况, 从子进程每次读取1024字节
@@ -508,6 +506,7 @@ async def convert_by_ffmpeg_on_buffer(audio_buffer, request_data, stream, input_
             # finally 块中的代码无论是否捕获到异常都会执行。
             # 确保在结束时关闭子进程，避免资源泄漏
             await process.wait()
+            tool_logger.info('done')
     else:
         # process.stdin.close()  # 关闭标准输入以表示结束
         # audio_data = await process.stdout.read()
@@ -564,6 +563,7 @@ async def convert_by_ffmpeg_on_path(audio, request_data, stream, input_format):
             # finally 块中的代码无论是否捕获到异常都会执行。
             # 确保在结束时关闭子进程，避免资源泄漏
             await process.wait()
+            tool_logger.info('done')
     else:
         # 非流式情况，读取所有输出数据
         # process.stdin.close()  # 关闭标准输入以表示结束
@@ -759,7 +759,7 @@ async def convert_audio(
         audio_format = audio_format.replace('.', '')
         media_type = media_type_map[audio_format]
         audio_info, input_format, audio = await get_audio(audio_file, request_data, output_dir, name)
-        logs = f"Convert audio request param: sno={sno}, uid={uid}, input_format={input_format}, to audio_format={audio_format}, audio info: {audio_info} "
+        logs = f"Convert audio request param: stream: {stream}, sno={sno}, uid={uid}, input_format={input_format}, to audio_format={audio_format}, audio info: {audio_info} "
         tool_logger.info(logs)
         convert_by_ffmpeg_map = {0: convert_by_ffmpeg_on_buffer, 1: convert_by_ffmpeg_on_path}
         audio_generator = convert_by_ffmpeg_map[is_audio_path](audio, request_data, stream, input_format)
@@ -820,15 +820,184 @@ async def convert_audio(
     #     raise HTTPException(status_code=500, detail=error_message.model_dump())
 
 
-@tool_app.get('/audio/convert')
+@tool_app.get('/audio/convert', response_class=HTMLResponse)
 async def convert_audio(
         request: Request,
-        audio_file: UploadFile = File(...),
 ):
-    pass
+    with open("audio_convert.html", "r", encoding="utf-8") as f:
+        return f.read()
+
+
+# 新增的 JavaScript 处理上传和播放音频
+@tool_app.get("/audio/upload")
+async def upload_audio_page(request: Request):
+    html_content = """
+    <!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>音频转换上传</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background-color: #f4f4f4;
+            margin: 0;
+            padding: 20px;
+        }
+        h1 {
+            text-align: center;
+            color: #333;
+            margin-bottom: 20px;
+            font-size: 24px;
+        }
+        .container {
+            max-width: 500px;
+            margin: 0 auto;
+            background: #fff;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+        }
+        form {
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+        }
+        .file-upload {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            position: relative;
+            overflow: hidden;
+            border: 2px dashed #ddd;
+            border-radius: 5px;
+            padding: 20px;
+            cursor: pointer;
+            transition: border-color 0.3s ease;
+            background-color: #fafafa;
+        }
+        .file-upload:hover {
+            border-color: #5cb85c;
+        }
+        .file-upload input[type="file"] {
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            opacity: 0;
+            cursor: pointer;
+        }
+        .file-upload-label {
+            font-size: 18px;
+            color: #555;
+            font-weight: bold;
+        }
+        button {
+            background-color: #5cb85c;
+            color: white;
+            padding: 10px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 18px;
+            transition: background-color 0.3s ease;
+        }
+        button:hover {
+            background-color: #4cae4c;
+        }
+        audio {
+            margin-top: 20px;
+            width: 100%;
+            outline: none;
+        }
+        .file-name {
+            margin-top: 10px;
+            font-size: 16px;
+            color: #333;
+            text-align: center;
+            font-weight: bold;
+        }
+        .input-group {
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+        }
+        .input-group label {
+            font-weight: bold;
+            color: #555;
+        }
+        .input-group input {
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            font-size: 16px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>上传音频文件进行转换</h1>
+        <form id="uploadForm" enctype="multipart/form-data">
+            <label class="file-upload">
+                <span class="file-upload-label">选择音频文件</span>
+                <input type="file" id="audioFile" name="audio_file" accept="audio/*" required onchange="displayFileName()">
+            </label>
+            <div class="input-group">
+                <label for="audioFormat">音频格式 (如 wav, mp3):</label>
+                <input type="text" id="audioFormat" name="audio_format" placeholder="请输入音频格式" required>
+            </div>
+            <div class="input-group">
+                <label for="audioSampleRate">采样率 (如 44100):</label>
+                <input type="number" id="audioSampleRate" name="audio_sample_rate" placeholder="请输入采样率" required>
+            </div>
+            <button type="submit">上传并转换</button>
+        </form>
+        <div class="file-name" id="fileName"></div> <!-- 显示文件名的区域 -->
+        <audio id="audioPlayer" controls style="display:none;"></audio>
+    </div>
+
+    <script>
+        function displayFileName() {
+            const audioFile = document.getElementById('audioFile').files[0]; // 获取选择的文件
+            const fileNameDisplay = document.getElementById('fileName');
+
+            if (audioFile) {
+                fileNameDisplay.textContent = `已选择文件: ${audioFile.name}`; // 显示文件名
+            } else {
+                fileNameDisplay.textContent = ''; // 清空文件名
+            }
+        }
+
+        document.getElementById('uploadForm').onsubmit = async function(event) {
+            event.preventDefault(); // 阻止表单默认提交
+
+            const formData = new FormData(this);
+            const response = await fetch('/audio/convert', {
+                method: 'POST',
+                body: formData
+            });
+
+            if (response.ok) {
+                const audioBlob = await response.blob(); // 获取音频的 Blob 对象
+                const audioUrl = URL.createObjectURL(audioBlob); // 创建对象 URL
+                const audioPlayer = document.getElementById('audioPlayer');
+                audioPlayer.src = audioUrl; // 设置音频播放源
+                audioPlayer.style.display = 'block'; // 显示音频播放器
+                audioPlayer.play(); // 播放音频
+            } else {
+                console.error('音频转换失败:', response.statusText);
+                alert('音频转换失败，请重试。');
+            }
+        };
+    </script>
+</body>
+</html>
+
+    """
+    return HTMLResponse(content=html_content)
 
 
 if __name__ == '__main__':
     video_info, openai_client = init_app()
-    uvicorn.run(tool_app, host='0.0.0.0', port=8093)
+    uvicorn.run(tool_app, host='0.0.0.0', port=8092)
     # uvicorn.run(tool_app, host='0.0.0.0', port=8090, workers=2, limit_concurrency=4, limit_max_requests=100)
