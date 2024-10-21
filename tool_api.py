@@ -478,7 +478,7 @@ async def convert_by_ffmpeg_on_buffer(audio, request_data, stream, input_format)
         '-f', input_format,
         '-ar', str(audio_sampling_rate),
         '-c:a', codec,  # 指定音频编解码器
-        '-ac', '1',
+        '-ac', '2',
         '-vn',  # 不处理视频
         '-async', '1',
         '-vsync', '1',
@@ -537,7 +537,7 @@ async def convert_by_ffmpeg_on_path(audio, request_data, stream, input_format):
         '-f', input_format,
         '-ar', str(audio_sampling_rate),
         '-c:a', codec,  # 指定音频编解码器
-        '-ac', '1',
+        '-ac', '2',
         '-vn',  # 不处理视频
         '-async', '1',
         '-vsync', '1',
