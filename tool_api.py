@@ -169,7 +169,7 @@ def init_app():
     file_path = 'video_info.json'
     with open(file_path, 'r', encoding='utf-8') as file:
         data = json.load(file)
-    url = "http://192.168.0.245:3000/api/v1"
+    url = "http://192.168.0.245:8012/api/v1"
     api_key = 'fastgpt-o69bFDwmfF6pMKGI89fsg8VJXJaqvvwFUBLov6a3WVu1UbBt1h1hr76zAT7Ii2U0'
     headers = {
         "Authorization": f"Bearer {api_key}",
@@ -590,8 +590,8 @@ async def log_requests(request: Request, call_next):
 @tool_app.get("/")
 async def index():
     service_name = """
-        <html> <head> <title>tts_service</title> </head>
-            <body style="display: flex; justify-content: center;"> <h1> tool_api</h1></body> </html>
+        <html> <head> <title>tool_api</title> </head>
+            <body style="display: flex; justify-content: center;"> <h1>tool_api</h1></body> </html>
         """
     return HTMLResponse(content=service_name, status_code=200)
 
