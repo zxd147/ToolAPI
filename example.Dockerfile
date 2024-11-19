@@ -1,4 +1,5 @@
-FROM base/api:python3.10-torch2.3.1
+# 基础镜像
+FROM base/python:ubuntu22.04-cuda11.8-python3.10
 
 # 设置环境变量
 #ENV all_proxy=http://192.168.0.64:7890
