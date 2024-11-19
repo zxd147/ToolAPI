@@ -83,13 +83,6 @@ def configure_logging():
     return logger
 
 
-tool_logger = configure_logging()
-tool_app = FastAPI()
-executor = ThreadPoolExecutor(max_workers=3)  # 根据需要设置工作线程数量
-tool_app.add_middleware(CORSMiddleware, allow_origins=['*'], allow_credentials=True, allow_methods=['*'],
-                        allow_headers=['*'])
-
-
 class MatchRequest(BaseModel):
     sno: Union[int, str] = Field(default_factory=lambda: int(time.time() * 100))  # 动态生成时间戳
     uid: Union[int, str] = 'admin'
@@ -156,6 +149,34 @@ class ConvertResponse(BaseModel):
     messages: str
     audio_path: Optional[str] = None  # 音频文件路径
     audio_base64: Optional[str] = None  # 音频 base64 编码
+
+
+class BasicAuthMiddleware(BaseHTTPMiddleware):
+    def __init__(self, app, secret_key: str):
+        super().__init__(app)
+        self.required_credentials = secret_key
+
+    async def dispatch(self, request: Request, call_next):
+        authorization: str = request.headers.get('Authorization')
+        if authorization and authorization.startswith('Bearer '):
+            provided_credentials = authorization.split(' ')[1]
+            # 比较提供的令牌和所需的令牌
+            if provided_credentials == self.required_credentials:
+                return await call_next(request)
+        # 返回一个带有自定义消息的JSON响应
+        return JSONResponse(
+            status_code=400,
+            content={"detail": "Unauthorized: Invalid or missing credentials"},
+            headers={'WWW-Authenticate': 'Bearer realm="Secure Area"'}
+        )
+
+
+tool_logger = configure_logging()
+executor = ThreadPoolExecutor(max_workers=3)  # 根据需要设置工作线程数量
+tool_app = FastAPI()
+secret_key = os.getenv('TOOL-API-SECRET-KEY', 'sk-tool-api')
+tool_app.add_middleware(CORSMiddleware, allow_origins=['*'], allow_credentials=True, allow_methods=['*'], allow_headers=['*'], )
+# tool_app.add_middleware(BasicAuthMiddleware, secret_key=secret_key)
 
 
 # 异步包装器函数，用于运行同步代码
