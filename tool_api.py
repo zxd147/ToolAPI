@@ -21,10 +21,10 @@ import numpy as np
 import uvicorn
 from fastapi import FastAPI, Request, HTTPException
 from fastapi import UploadFile, File
-from fastapi.responses import JSONResponse, HTMLResponse
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, JSONResponse, HTMLResponse
 from openai import OpenAI
 from pydantic import BaseModel, Field
+from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.cors import CORSMiddleware
 
 # 支持的音频格式
@@ -190,7 +190,7 @@ def init_app():
     file_path = 'video_info.json'
     with open(file_path, 'r', encoding='utf-8') as file:
         data = json.load(file)
-    url = "http://192.168.0.245:8012/api/v1"
+    url = "http://192.168.0.244:8012/api/v1"
     api_key = 'fastgpt-o69bFDwmfF6pMKGI89fsg8VJXJaqvvwFUBLov6a3WVu1UbBt1h1hr76zAT7Ii2U0'
     headers = {
         "Authorization": f"Bearer {api_key}",
@@ -289,8 +289,10 @@ async def get_match_result(text, asr_messages, match_data):
             ]
         )
         content = completion.choices[0].message.content
+        # 清理换行符和其他控制字符
+        cleaned_content = re.sub(r'[\x00-\x1F\x7F]', '', content)
         # 将 JSON 字符串转换为 Python 对象（列表）
-        retrieved_response = json.loads(content)
+        retrieved_response = json.loads(cleaned_content)
         # 根据检索方式获取 question_id 和对应的 q
         retrieved_result = next(
             ((item['id'], item['q'], item['a'], score['value'])  # 获取 id, q 和 value
@@ -380,12 +382,9 @@ async def get_gpt_result(uid, text):
 
 
 async def get_tts_result(uid, text):
-    tts_url = "http://192.168.0.246:8088/uptts"
+    tts_url = "http://192.168.0.246:8031/v1/tts"
     headers = {"Content-Type": "application/json"}
-    tts_data = {
-        "uid": uid,
-        "content": text
-    }
+    tts_data = {'uid': uid, "text": text, 'speaker': 'li', 'language': 'mix', 'speech_rate': 1.2}
     async with httpx.AsyncClient() as httpx_client:
         response = await httpx_client.post(tts_url, headers=headers, json=tts_data)
         data = response.json()
@@ -666,14 +665,14 @@ async def match(
         logs = f"Completions response  error: {error_message}\n "
         tool_logger.error(logs)
         return JSONResponse(status_code=400, content=error_message.model_dump())
-    except Exception as e:
-        error_message = MatchResponse(
-            code=-1,
-            messages=f"Exception: {str(e)}"
-        )
-        logs = f"Completions response error: {error_message}\n"
-        tool_logger.error(logs)
-        raise HTTPException(status_code=500, detail=error_message.model_dump())
+    # except Exception as e:
+    #     error_message = MatchResponse(
+    #         code=-1,
+    #         messages=f"Exception: {str(e)}"
+    #     )
+    #     logs = f"Completions response error: {error_message}\n"
+    #     tool_logger.error(logs)
+    #     raise HTTPException(status_code=500, detail=error_message.model_dump())
 
 
 @tool_app.post("/conversation/live")
@@ -710,7 +709,7 @@ async def live(
             logs = f"answer_{idx + 1} = {msg}\n"
             tool_logger.info(logs)
             code, audio_data = await get_tts_result(request.uid, msg)
-            audio_name = audio_data["return_path"].split("/")[1]
+            audio_name = audio_data["audio_path"].split("/")[-1]
             logs = f"tts results: {audio_name}\n"
             tool_logger.info(logs)
             code, info = await go_infer_video(request.uid, audio_name)
@@ -738,14 +737,14 @@ async def live(
         logs = f"Completions response  error: {error_message}\n "
         tool_logger.error(logs)
         return JSONResponse(status_code=400, content=error_message.model_dump())
-    except Exception as e:
-        error_message = MatchResponse(
-            code=-1,
-            messages=f"Exception: {str(e)}"
-        )
-        logs = f"Completions response error: {error_message}\n"
-        tool_logger.error(logs)
-        raise HTTPException(status_code=500, detail=error_message.model_dump())
+    # except Exception as e:
+    #     error_message = MatchResponse(
+    #         code=-1,
+    #         messages=f"Exception: {str(e)}"
+    #     )
+    #     logs = f"Completions response error: {error_message}\n"
+    #     tool_logger.error(logs)
+    #     raise HTTPException(status_code=500, detail=error_message.model_dump())
 
 
 @tool_app.post("/audio/convert")
