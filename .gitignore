@@ -24,5 +24,6 @@ bak.match_api.py
 bak.video_info.json
 logs
 temp
-Dockerfile
+Docker/*
+!Docker/example.Dockerfile
 
