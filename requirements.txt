@@ -1,0 +1,15 @@
+aiohttp>=3.10.11
+environs==11.1.0
+fastapi==0.115.5
+Flask==3.0.3
+Flask_RESTful==0.3.10
+GPUtil==1.4.0
+GPUtil==1.4.0
+loguru==0.7.2
+psutil==5.9.0
+pydantic==2.9.2
+PyYAML==6.0.1
+Requests==2.32.3
+uvicorn==0.32.0
+torch==2.3.1
+
