@@ -114,7 +114,7 @@
             </div>
             <div class="input-group">
                 <label for="audioSampleRate">采样率 (如 44100):</label>
-                <input type="number" id="audioSampleRate" name="audio_sample_rate" placeholder="请输入采样率">
+                <input type="number" id="audioSampleRate" name="audio_sampling_rate" placeholder="请输入采样率">
             </div>
             <button type="submit">上传并转换</button>
         </form>
@@ -134,34 +134,18 @@
 
         document.getElementById('uploadForm').onsubmit = async function(event) {
             event.preventDefault(); // 阻止表单默认提交
-            const formData = new FormData(this);
-            const audioFormat = document.getElementById('audioFormat').value.trim();
-            const audioSampleRate = document.getElementById('audioSampleRate').value.trim();
-
-            // 仅在填写了音频格式且非空时添加到 FormData
-            if (audioFormat) {
-                formData.append('audio_format', audioFormat);
-                console.log('添加音频格式到FormData:', audioFormat);
-            } else {
-                console.log('未添加音频格式，因为为空');
-            }
-
-            // 仅在填写了采样率且非空时添加到 FormData
-            if (audioSampleRate) {
-                formData.append('audio_sample_rate', audioSampleRate);
-                console.log('添加采样率到FormData:', audioSampleRate);
-            } else {
-                console.log('未添加采样率，因为为空');
-            }
-
-            // 过滤空字段
+            const formData = new FormData(this); // 创建 FormData 对象
+            const cleanedFormData = new FormData();  // 创建空表单
+            // 重新添加非空字段
             for (const [key, value] of formData.entries()) {
-                if (!value) {
-                    formData.delete(key, value);
+                const valueStr = String(value).trim();
+                if (valueStr) {
+                     console.log(`add ${key} ${valueStr}`);
+                    cleanedFormData.append(key, value); // 只添加非空字段
                 }
             }
 
-            const response = await fetch('/audio/convert', { method: 'POST', body: formData });
+            const response = await fetch('/audio/convert', { method: 'POST', body: cleanedFormData });
             if (response.ok) {
                 const audioBlob = await response.blob(); // 获取音频的 Blob 对象
                 const audioUrl = URL.createObjectURL(audioBlob); // 创建对象 URL

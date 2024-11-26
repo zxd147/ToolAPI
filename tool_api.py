@@ -176,7 +176,7 @@ executor = ThreadPoolExecutor(max_workers=3)  # 根据需要设置工作线程�
 tool_app = FastAPI()
 secret_key = os.getenv('TOOL-API-SECRET-KEY', 'sk-tool-api')
 tool_app.add_middleware(CORSMiddleware, allow_origins=['*'], allow_credentials=True, allow_methods=['*'], allow_headers=['*'], )
-tool_app.add_middleware(BasicAuthMiddleware, secret_key=secret_key)
+# tool_app.add_middleware(BasicAuthMiddleware, secret_key=secret_key)
 
 
 # 异步包装器函数，用于运行同步代码
