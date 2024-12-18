@@ -13,15 +13,16 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from typing import Optional, Union
+from urllib.parse import quote, unquote
 
 import aiofiles
 import httpx
 import magic
 import numpy as np
 import uvicorn
-from fastapi import FastAPI, Request, HTTPException
+from fastapi import FastAPI, Request, Form
 from fastapi import UploadFile, File
-from fastapi.responses import StreamingResponse, JSONResponse, HTMLResponse
+from fastapi.responses import StreamingResponse, JSONResponse, HTMLResponse, FileResponse
 from openai import OpenAI
 from pydantic import BaseModel, Field
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -151,6 +152,37 @@ class ConvertResponse(BaseModel):
     audio_base64: Optional[str] = None  # 音频 base64 编码
 
 
+class UploadRequest(BaseModel):
+    sno: Union[int, str] = Field(default_factory=lambda: int(time.time() * 100))  # 动态生成时间戳
+    uid: Union[int, str] = 'admin'
+    content_type: str = 'audio/wav'  # 文件格式默认值 'audio/wav'
+    file_format: str = '.wav'  # 默认值 ".wav"后缀
+    upload_dir: Optional[str] = '/mnt/digital_service/audio/'  # 表单中的文件路径
+
+
+class UploadResponse(BaseModel):
+    code: int
+    sno: Optional[Union[int, str]] = None
+    messages: str
+    file_name: Optional[str] = None  # 音频文件路径
+    file_path: Optional[str] = None  # 音频文件路径
+
+
+class ManageRequest(BaseModel):
+    sno: Union[int, str] = Field(default_factory=lambda: int(time.time() * 100))  # 动态生成时间戳
+    uid: Union[int, str] = 'admin'
+    manage_path: Optional[str] = '/home/zxd/share/'  # 表单中的文件路径
+
+
+class ManageResponse(BaseModel):
+    code: int
+    sno: Optional[Union[int, str]] = None
+    messages: str
+    file: Optional[str] = None  # 音频文件路径
+    file_name: Optional[str] = None  # 音频文件路径
+    file_path: Optional[str] = None  # 音频文件路径
+
+
 class BasicAuthMiddleware(BaseHTTPMiddleware):
     def __init__(self, app, secret_key: str):
         super().__init__(app)
@@ -175,8 +207,8 @@ tool_logger = configure_logging()
 executor = ThreadPoolExecutor(max_workers=3)  # 根据需要设置工作线程数量
 tool_app = FastAPI()
 secret_key = os.getenv('TOOL-API-SECRET-KEY', 'sk-tool-api')
-tool_app.add_middleware(CORSMiddleware, allow_origins=['*'], allow_credentials=True, allow_methods=['*'], allow_headers=['*'], )
 tool_app.add_middleware(BasicAuthMiddleware, secret_key=secret_key)
+tool_app.add_middleware(CORSMiddleware, allow_origins=['*'], allow_credentials=True, allow_methods=['*'], allow_headers=['*'], )
 
 
 # 异步包装器函数，用于运行同步代码
@@ -186,7 +218,7 @@ async def run_sync(func, *args):
     return result
 
 
-def init_app():
+async def init_app():
     file_path = 'video_info.json'
     with open(file_path, 'r', encoding='utf-8') as file:
         data = json.load(file)
@@ -238,7 +270,8 @@ async def get_audio(audio_file, request_data, output_dir, name):
             audio = audio_path
             # 获取文件后缀，例如 ".mp3"
             content_type = magic.from_file(audio_path, mime=True)
-            input_format = mimetypes.guess_extension(content_type, strict=False) or input_format or os.path.splitext(audio_path)[1]
+            input_format = mimetypes.guess_extension(content_type, strict=False) or input_format or \
+                           os.path.splitext(audio_path)[1]
             audio_info = f"File type: file_path, Format: {input_format}, Size: unknown bytes."
         else:
             raise FileNotFoundError(f"File not found: {audio_path}.")
@@ -494,7 +527,7 @@ async def convert_by_ffmpeg_on_buffer(audio, request_data, stream, input_format)
     command = [
         'ffmpeg',
         '-stream_loop', '-1',
-        '-i', "pipe:0",  # 从文件路径读取, 直接开始处理数据
+        '-i', "pipe:0",  # 从文件读取, 直接开始处理数据
         '-f', input_format,
         '-ar', str(audio_sampling_rate),
         '-c:a', codec,  # 指定音频编解码器
@@ -537,7 +570,8 @@ async def convert_by_ffmpeg_on_buffer(audio, request_data, stream, input_format)
     tool_logger.info(f"time_all: {end - start}")
     # 检查错误信息
     if process.returncode != 0:
-        error_data = process.stderr.read()
+        error_data = await process.stderr.read()
+        tool_logger.error(f"FFmpeg command failed: {command}")
         raise RuntimeError(f'FFmpeg error: {error_data}')
 
 
@@ -616,6 +650,7 @@ async def index():
     return HTMLResponse(content=service_name, status_code=200)
 
 
+@tool_app.get("/http_check")
 @tool_app.get("/health")
 async def health():
     """Health check."""
@@ -692,11 +727,11 @@ async def live(
             request = MatchRequest(**form_data)
         if request.uid != "dentist":
             results = MatchResponse(
-                code=-2,
+                code=1,
                 sno=request.sno,
                 messages="用户名不对",
             )
-            return JSONResponse(status_code=200, content=results.model_dump())
+            return JSONResponse(status_code=400, content=results.model_dump())
         request_data = request.model_dump()
         sno = request_data['sno']
         text, file_info, asr_messages = await get_text(file, request_data)
@@ -745,6 +780,14 @@ async def live(
     #     logs = f"Completions response error: {error_message}\n"
     #     tool_logger.error(logs)
     #     raise HTTPException(status_code=500, detail=error_message.model_dump())
+
+
+@tool_app.get('/audio/convert', response_class=HTMLResponse)
+async def convert_audio(
+        request: Request,
+):
+    with open("audio_convert.html", "r", encoding="utf-8") as f:
+        return f.read()
 
 
 @tool_app.post("/audio/convert")
@@ -840,184 +883,199 @@ async def convert_audio(
     #     raise HTTPException(status_code=500, detail=error_message.model_dump())
 
 
-@tool_app.get('/audio/convert', response_class=HTMLResponse)
-async def convert_audio(
-        request: Request,
-):
-    with open("audio_convert.html", "r", encoding="utf-8") as f:
+@tool_app.get('/file/upload', response_class=HTMLResponse)
+async def upload_file():
+    with open("file_upload.html", "r", encoding="utf-8") as f:
         return f.read()
 
 
-# 新增的 JavaScript 处理上传和播放音频
-@tool_app.get("/audio/upload")
-async def upload_audio_page(request: Request):
-    html_content = """
-    <!DOCTYPE html>
-<html lang="zh">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>音频转换上传</title>
-    <style>
-        body {
-            font-family: Arial, sans-serif;
-            background-color: #f4f4f4;
-            margin: 0;
-            padding: 20px;
-        }
-        h1 {
-            text-align: center;
-            color: #333;
-            margin-bottom: 20px;
-            font-size: 24px;
-        }
-        .container {
-            max-width: 500px;
-            margin: 0 auto;
-            background: #fff;
-            padding: 20px;
-            border-radius: 8px;
-            box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
-        }
-        form {
-            display: flex;
-            flex-direction: column;
-            gap: 15px;
-        }
-        .file-upload {
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            position: relative;
-            overflow: hidden;
-            border: 2px dashed #ddd;
-            border-radius: 5px;
-            padding: 20px;
-            cursor: pointer;
-            transition: border-color 0.3s ease;
-            background-color: #fafafa;
-        }
-        .file-upload:hover {
-            border-color: #5cb85c;
-        }
-        .file-upload input[type="file"] {
-            position: absolute;
-            width: 100%;
-            height: 100%;
-            opacity: 0;
-            cursor: pointer;
-        }
-        .file-upload-label {
-            font-size: 18px;
-            color: #555;
-            font-weight: bold;
-        }
-        button {
-            background-color: #5cb85c;
-            color: white;
-            padding: 10px;
-            border: none;
-            border-radius: 5px;
-            cursor: pointer;
-            font-size: 18px;
-            transition: background-color 0.3s ease;
-        }
-        button:hover {
-            background-color: #4cae4c;
-        }
-        audio {
-            margin-top: 20px;
-            width: 100%;
-            outline: none;
-        }
-        .file-name {
-            margin-top: 10px;
-            font-size: 16px;
-            color: #333;
-            text-align: center;
-            font-weight: bold;
-        }
-        .input-group {
-            display: flex;
-            flex-direction: column;
-            gap: 5px;
-        }
-        .input-group label {
-            font-weight: bold;
-            color: #555;
-        }
-        .input-group input {
-            padding: 10px;
-            border: 1px solid #ddd;
-            border-radius: 5px;
-            font-size: 16px;
-        }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <h1>上传音频文件进行转换</h1>
-        <form id="uploadForm" enctype="multipart/form-data">
-            <label class="file-upload">
-                <span class="file-upload-label">选择音频文件</span>
-                <input type="file" id="audioFile" name="audio_file" accept="audio/*" required onchange="displayFileName()">
-            </label>
-            <div class="input-group">
-                <label for="audioFormat">音频格式 (如 wav, mp3):</label>
-                <input type="text" id="audioFormat" name="audio_format" placeholder="请输入音频格式" required>
-            </div>
-            <div class="input-group">
-                <label for="audioSampleRate">采样率 (如 44100):</label>
-                <input type="number" id="audioSampleRate" name="audio_sample_rate" placeholder="请输入采样率" required>
-            </div>
-            <button type="submit">上传并转换</button>
-        </form>
-        <div class="file-name" id="fileName"></div> <!-- 显示文件名的区域 -->
-        <audio id="audioPlayer" controls style="display:none;"></audio>
-    </div>
+@tool_app.post('/file/upload')
+async def upload_file(
+        request: Request,
+        file: UploadFile = File(...),
+):
+    try:
+        start = time.process_time()
+        # 判断请求的内容类型
+        if request.headers.get('content-type') == 'application/json':
+            json_data = await request.json()
+            request = UploadRequest(**json_data)
+        else:
+            # 解析表单数据
+            form_data = await request.form()
+            request = UploadRequest(**form_data)
+        upload_dir = request.upload_dir
+        # 创建目录（如果不存在）
+        if not os.path.exists(upload_dir):
+            raise FileNotFoundError(f'upload_dir: {upload_dir} not exist!')
+        file_name = file.filename
+        # 保存文件
+        file_path = os.path.join(upload_dir, file_name)
+        with open(file_path, "wb") as f:
+            f.write(await file.read())
+        messages = "Upload successful!"
+        results = UploadResponse(code=0, messages=messages, file_name=file_name, file_path=file_path)
+        logs = f"File upload results: {results.model_dump()}\n"
+        tool_logger.info(logs)
+        end = time.process_time()
+        tool_logger.info(f"time_all: {end - start}")
+        return JSONResponse(status_code=200, content=results.model_dump())
+    except json.JSONDecodeError as je:
+        error_message = UploadResponse(
+            code=-1,
+            messages=f"JSONDecodeError: {str(je)} "
+        )
+        logs = f"Completions response  error: {error_message}\n "
+        tool_logger.error(logs)
+        return JSONResponse(status_code=404, content=error_message.model_dump())
+    except FileNotFoundError as je:
+        error_message = UploadResponse(
+            code=-1,
+            messages=f"FileNotFoundError, Invalid JSON format: {str(je)} "
+        )
+        logs = f"Completions response  error: {error_message}\n "
+        tool_logger.error(logs)
+        return JSONResponse(status_code=400, content=error_message.model_dump())
+    # except Exception as e:
+    #     error_message = UploadResponse(
+    #         code=-1,
+    #         messages=f"Exception: {str(e)}"
+    #     )
+    #     logs = f"Completions response error: {error_message}\n"
+    #     tool_logger.error(logs)
+    #     raise HTTPException(status_code=500, detail=error_message.model_dump())
 
-    <script>
-        function displayFileName() {
-            const audioFile = document.getElementById('audioFile').files[0]; // 获取选择的文件
-            const fileNameDisplay = document.getElementById('fileName');
 
-            if (audioFile) {
-                fileNameDisplay.textContent = `已选择文件: ${audioFile.name}`; // 显示文件名
-            } else {
-                fileNameDisplay.textContent = ''; // 清空文件名
-            }
-        }
+# @tool_app.get("/file/manage", response_class=HTMLResponse)
+# async def file_management():
+#     with open("file_management.html", "r", encoding="utf-8") as f:
+#         return f.read()
 
-        document.getElementById('uploadForm').onsubmit = async function(event) {
-            event.preventDefault(); // 阻止表单默认提交
 
-            const formData = new FormData(this);
-            const response = await fetch('/audio/convert', {
-                method: 'POST',
-                body: formData
-            });
+@tool_app.get("/file/manage")
+async def file_management(request: Request, manage_path: str = '/home/zxd/share'):
+    try:
+        # 检查路径是否存在
+        if not os.path.exists(manage_path):
+            return HTMLResponse(content=f"<h1>manage_path: {manage_path} not exist！</h1>", status_code=404)
+        # 如果是文件，直接提供下载
+        if os.path.isfile(manage_path):
+            filename = os.path.basename(manage_path)
+            return FileResponse(
+                path=manage_path,
+                media_type="application/octet-stream",
+                filename=filename,
+            )
+        # 如果是目录，列出子文件和子目录
+        elif os.path.isdir(manage_path):
+            # 构造 HTML 页面
+            file_list = os.listdir(manage_path)
+            html = f"<h1>目录: {manage_path}</h1>"
+            html += '<ul style="font-family: Arial; line-height: 1.8;">'
+            # 返回上级目录
+            parent_path = os.path.dirname(manage_path)
+            if os.path.abspath(manage_path) != os.path.abspath("/"):  # 根目录不显示返回上级
+                html += f'<li><a href="/file/manage?manage_path={quote(parent_path)}">[返回上级]</a></li>'
 
-            if (response.ok) {
-                const audioBlob = await response.blob(); // 获取音频的 Blob 对象
-                const audioUrl = URL.createObjectURL(audioBlob); // 创建对象 URL
-                const audioPlayer = document.getElementById('audioPlayer');
-                audioPlayer.src = audioUrl; // 设置音频播放源
-                audioPlayer.style.display = 'block'; // 显示音频播放器
-                audioPlayer.play(); // 播放音频
-            } else {
-                console.error('音频转换失败:', response.statusText);
-                alert('音频转换失败，请重试。');
-            }
-        };
-    </script>
-</body>
-</html>
+            for file_name in sorted(file_list):
+                full_path = os.path.join(manage_path, file_name)
+                display_name = f"{file_name}/" if os.path.isdir(full_path) else file_name
+                html += f'<li><a href="/file/manage?manage_path={quote(full_path)}">{display_name}</a></li>'
+            html += "</ul>"
+            return HTMLResponse(content=html, status_code=200)
+        else:
+            return HTMLResponse(
+                content=f"<h1>目录或文件 {manage_path} 不存在！</h1>", status_code=404
+            )
+    except json.JSONDecodeError as je:
+        error_message = ManageResponse(
+            code=-1,
+            messages=f"JSONDecodeError: {str(je)} "
+        )
+        logs = f"Completions response  error: {error_message}\n "
+        tool_logger.error(logs)
+        return JSONResponse(status_code=404, content=error_message.model_dump())
+    except FileNotFoundError as je:
+        error_message = ManageResponse(
+            code=-1,
+            messages=f"FileNotFoundError, Invalid JSON format: {str(je)} "
+        )
+        logs = f"Completions response  error: {error_message}\n "
+        tool_logger.error(logs)
+        return JSONResponse(status_code=400, content=error_message.model_dump())
+    # except Exception as e:
+    #     error_message = ManageResponse(
+    #         code=-1,
+    #         messages=f"Exception: {str(e)}"
+    #     )
+    #     logs = f"Completions response error: {error_message}\n"
+    #     tool_logger.error(logs)
+    #     raise HTTPException(status_code=500, detail=error_message.model_dump())
 
-    """
-    return HTMLResponse(content=html_content)
+
+@tool_app.post("/file/manage")
+async def file_management_post(request: ManageRequest):
+    try:
+        manage_path = request.manage_path
+        # 检查路径是否存在
+        if not os.path.exists(manage_path):
+            return HTMLResponse(content=f"<h1>manage_path: {manage_path} not exist！</h1>", status_code=404)
+        # 如果是文件，直接提供下载
+        if os.path.isfile(manage_path):
+            filename = os.path.basename(manage_path)
+            return FileResponse(
+                path=manage_path,
+                media_type="application/octet-stream",
+                filename=filename,
+            )
+
+        # 如果是目录，列出子文件和子目录
+        elif os.path.isdir(manage_path):
+            # 构造 HTML 页面
+            file_list = os.listdir(manage_path)
+            html = f"<h1>目录: {manage_path}</h1>"
+            html += '<ul style="font-family: Arial; line-height: 1.8;">'
+            # 返回上级目录
+            parent_path = os.path.dirname(manage_path)
+            if os.path.abspath(manage_path) != os.path.abspath("/"):  # 根目录不显示返回上级
+                html += f'<li><a href="/file/manage?manage_path={quote(parent_path)}">[返回上级]</a></li>'
+
+            for file_name in sorted(file_list):
+                full_path = os.path.join(manage_path, file_name)
+                display_name = f"{file_name}/" if os.path.isdir(full_path) else file_name
+                html += f'<li><a href="/file/manage?manage_path={quote(full_path)}">{display_name}</a></li>'
+            html += "</ul>"
+            return HTMLResponse(content=html, status_code=200)
+        else:
+            return HTMLResponse(content=f"<h1>目录或文件 {manage_path} 不存在！</h1>", status_code=404)
+
+    except json.JSONDecodeError as je:
+        error_message = ManageResponse(
+            code=-1,
+            messages=f"JSONDecodeError: {str(je)}"
+        )
+        logs = f"Completions response error: {error_message}\n"
+        tool_logger.error(logs)
+        return JSONResponse(status_code=400, content=error_message.model_dump())
+    except FileNotFoundError as je:
+        error_message = ManageResponse(
+            code=-1,
+            messages=f"FileNotFoundError, Invalid JSON format: {str(je)}"
+        )
+        logs = f"Completions response error: {error_message}\n"
+        tool_logger.error(logs)
+        return JSONResponse(status_code=400, content=error_message.model_dump())
+
+    except Exception as e:
+        error_message = ManageResponse(
+            code=-1,
+            messages=f"Exception: {str(e)}"
+        )
+        logs = f"Completions response error: {error_message}\n"
+        tool_logger.error(logs)
+        return JSONResponse(status_code=500, content=error_message.model_dump())
 
 
 if __name__ == '__main__':
-    video_info, openai_client = init_app()
+    video_info, openai_client = asyncio.run(init_app())
     uvicorn.run(tool_app, host='0.0.0.0', port=8092)
-    # uvicorn.run(tool_app, host='0.0.0.0', port=8090, workers=2, limit_concurrency=4, limit_max_requests=100)

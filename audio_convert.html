@@ -106,7 +106,7 @@
         <form id="uploadForm" enctype="multipart/form-data">
             <label class="file-upload">
                 <span class="file-upload-label">选择音频文件</span>
-                <input type="file" id="audioFile" name="audio_file" accept="audio/*" required onchange="displayFileName()">
+                <input type="file" id="audioFile" name="audio_file" accept="*/*" required onchange="displayFileName()">
             </label>
             <div class="input-group">
                 <label for="audioFormat">音频格式 (如 wav, mp3):</label>
@@ -140,13 +140,14 @@
             for (const [key, value] of formData.entries()) {
                 const valueStr = String(value).trim();
                 if (valueStr) {
-                     console.log(`add ${key} ${valueStr}`);
+                    console.log(`add ${key} ${valueStr}`);
                     cleanedFormData.append(key, value); // 只添加非空字段
                 }
             }
 
             const response = await fetch('/audio/convert', { method: 'POST', body: cleanedFormData });
             if (response.ok) {
+                alert(`音频转换成功`);
                 const audioBlob = await response.blob(); // 获取音频的 Blob 对象
                 const audioUrl = URL.createObjectURL(audioBlob); // 创建对象 URL
                 const audioPlayer = document.getElementById('audioPlayer');
