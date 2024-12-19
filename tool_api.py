@@ -12,15 +12,15 @@ import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
-from typing import Optional, Union
-from urllib.parse import quote, unquote
+from typing import Optional, Union, List
+from urllib.parse import quote
 
 import aiofiles
 import httpx
 import magic
 import numpy as np
 import uvicorn
-from fastapi import FastAPI, Request, Form
+from fastapi import FastAPI, Request
 from fastapi import UploadFile, File
 from fastapi.responses import StreamingResponse, JSONResponse, HTMLResponse, FileResponse
 from openai import OpenAI
@@ -178,9 +178,9 @@ class ManageResponse(BaseModel):
     code: int
     sno: Optional[Union[int, str]] = None
     messages: str
-    file: Optional[str] = None  # 音频文件路径
-    file_name: Optional[str] = None  # 音频文件路径
-    file_path: Optional[str] = None  # 音频文件路径
+    type: str  # 文件或目录的类型 ("file" 或 "directory")
+    manage_path: str  # 当前路径
+    contents: Optional[List[dict]] = None  # 子文件和子目录的列表
 
 
 class BasicAuthMiddleware(BaseHTTPMiddleware):
@@ -927,15 +927,15 @@ async def upload_file(
         )
         logs = f"Completions response  error: {error_message}\n "
         tool_logger.error(logs)
-        return JSONResponse(status_code=404, content=error_message.model_dump())
-    except FileNotFoundError as je:
+        return JSONResponse(status_code=400, content=error_message.model_dump())
+    except FileNotFoundError as fe:
         error_message = UploadResponse(
             code=-1,
-            messages=f"FileNotFoundError, Invalid JSON format: {str(je)} "
+            messages=f"FileNotFoundError: {str(fe)} "
         )
         logs = f"Completions response  error: {error_message}\n "
         tool_logger.error(logs)
-        return JSONResponse(status_code=400, content=error_message.model_dump())
+        return JSONResponse(status_code=404, content=error_message.model_dump())
     # except Exception as e:
     #     error_message = UploadResponse(
     #         code=-1,
@@ -944,12 +944,6 @@ async def upload_file(
     #     logs = f"Completions response error: {error_message}\n"
     #     tool_logger.error(logs)
     #     raise HTTPException(status_code=500, detail=error_message.model_dump())
-
-
-# @tool_app.get("/file/manage", response_class=HTMLResponse)
-# async def file_management():
-#     with open("file_management.html", "r", encoding="utf-8") as f:
-#         return f.read()
 
 
 @tool_app.get("/file/manage")
@@ -982,45 +976,34 @@ async def file_management(request: Request, manage_path: str = '/home/zxd/share'
                 display_name = f"{file_name}/" if os.path.isdir(full_path) else file_name
                 html += f'<li><a href="/file/manage?manage_path={quote(full_path)}">{display_name}</a></li>'
             html += "</ul>"
-            return HTMLResponse(content=html, status_code=200)
+            return HTMLResponse(status_code=200, content=html)
         else:
-            return HTMLResponse(
-                content=f"<h1>目录或文件 {manage_path} 不存在！</h1>", status_code=404
-            )
+            html = f"<h1>目录或文件 {manage_path} 不存在！</h1>"
+            return HTMLResponse(status_code=404, content=html)
     except json.JSONDecodeError as je:
-        error_message = ManageResponse(
-            code=-1,
-            messages=f"JSONDecodeError: {str(je)} "
-        )
-        logs = f"Completions response  error: {error_message}\n "
-        tool_logger.error(logs)
-        return JSONResponse(status_code=404, content=error_message.model_dump())
-    except FileNotFoundError as je:
-        error_message = ManageResponse(
-            code=-1,
-            messages=f"FileNotFoundError, Invalid JSON format: {str(je)} "
-        )
-        logs = f"Completions response  error: {error_message}\n "
-        tool_logger.error(logs)
-        return JSONResponse(status_code=400, content=error_message.model_dump())
-    # except Exception as e:
-    #     error_message = ManageResponse(
-    #         code=-1,
-    #         messages=f"Exception: {str(e)}"
-    #     )
-    #     logs = f"Completions response error: {error_message}\n"
-    #     tool_logger.error(logs)
-    #     raise HTTPException(status_code=500, detail=error_message.model_dump())
+        error_message = f"<h1>JSONDecodeError: {str(je)}</h1>"
+        tool_logger.error(f"Completions response error: {error_message}")
+        return HTMLResponse(status_code=400, content=error_message)
+    except FileNotFoundError as fe:
+        error_message = f"<h1>FileNotFoundError: {str(fe)}</h1>"
+        tool_logger.error(f"Completions response error: {error_message}")
+        return HTMLResponse(status_code=404, content=error_message)
+    except Exception as e:
+        error_message = f"<h1>Exception: {str(e)}</h1>"
+        tool_logger.error(f"Completions response error: {error_message}")
+        return HTMLResponse(status_code=500, content=error_message)
 
 
 @tool_app.post("/file/manage")
-async def file_management_post(request: ManageRequest):
+async def file_management(request: ManageRequest):
     try:
         manage_path = request.manage_path
+
         # 检查路径是否存在
         if not os.path.exists(manage_path):
-            return HTMLResponse(content=f"<h1>manage_path: {manage_path} not exist！</h1>", status_code=404)
-        # 如果是文件，直接提供下载
+            raise FileNotFoundError(f"Path '{manage_path}' does not exist!")
+
+        # 如果是文件，返回文件内容
         if os.path.isfile(manage_path):
             filename = os.path.basename(manage_path)
             return FileResponse(
@@ -1029,47 +1012,43 @@ async def file_management_post(request: ManageRequest):
                 filename=filename,
             )
 
-        # 如果是目录，列出子文件和子目录
+        # 如果是目录，列出子文件和子目录路径，并区分类型
         elif os.path.isdir(manage_path):
-            # 构造 HTML 页面
             file_list = os.listdir(manage_path)
-            html = f"<h1>目录: {manage_path}</h1>"
-            html += '<ul style="font-family: Arial; line-height: 1.8;">'
-            # 返回上级目录
-            parent_path = os.path.dirname(manage_path)
-            if os.path.abspath(manage_path) != os.path.abspath("/"):  # 根目录不显示返回上级
-                html += f'<li><a href="/file/manage?manage_path={quote(parent_path)}">[返回上级]</a></li>'
-
+            files = []
+            directories = []
+            # 区分子文件和子目录
             for file_name in sorted(file_list):
                 full_path = os.path.join(manage_path, file_name)
-                display_name = f"{file_name}/" if os.path.isdir(full_path) else file_name
-                html += f'<li><a href="/file/manage?manage_path={quote(full_path)}">{display_name}</a></li>'
-            html += "</ul>"
-            return HTMLResponse(content=html, status_code=200)
+                if os.path.isdir(full_path):
+                    directories.append({
+                        "name": file_name,
+                        "path": full_path,
+                        "type": "directory"
+                    })
+                else:
+                    files.append({
+                        "name": file_name,
+                        "path": full_path,
+                        "type": "file"
+                    })
+            messages = f"Directory '{manage_path}' contains {len(directories)} directories and {len(files)} files."
+            result = ManageResponse(code=0, type="directory", manage_path=manage_path, contents=files + directories, messages=messages)
+            return JSONResponse(status_code=200, content=result.model_dump())
         else:
-            return HTMLResponse(content=f"<h1>目录或文件 {manage_path} 不存在！</h1>", status_code=404)
-
-    except json.JSONDecodeError as je:
+            raise ValueError(f"Path '{manage_path}' is neither a file nor a directory.")
+    except FileNotFoundError as fe:
         error_message = ManageResponse(
             code=-1,
-            messages=f"JSONDecodeError: {str(je)}"
+            messages=f"FileNotFoundError: {str(fe)}"
         )
         logs = f"Completions response error: {error_message}\n"
         tool_logger.error(logs)
-        return JSONResponse(status_code=400, content=error_message.model_dump())
-    except FileNotFoundError as je:
-        error_message = ManageResponse(
-            code=-1,
-            messages=f"FileNotFoundError, Invalid JSON format: {str(je)}"
-        )
-        logs = f"Completions response error: {error_message}\n"
-        tool_logger.error(logs)
-        return JSONResponse(status_code=400, content=error_message.model_dump())
-
+        return JSONResponse(status_code=404, content=error_message.model_dump())
     except Exception as e:
         error_message = ManageResponse(
             code=-1,
-            messages=f"Exception: {str(e)}"
+            messages=f"An unexpected error occurred: {str(e)}"
         )
         logs = f"Completions response error: {error_message}\n"
         tool_logger.error(logs)
